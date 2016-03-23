@@ -1,0 +1,41 @@
+$light-square: #eeeeee;
+$dark-square: #aaaaaa;
+
+.boardWrapper {
+  width: 100%;
+  background: #333333;
+  box-shadow: inset 0px 0px 10px black;
+  padding: 25px;
+
+  .chessBoard {
+    margin: 0 auto;
+  }
+}
+
+.boardSquare {
+  width: 60px;
+  height: 60px;
+  text-align: center;
+
+  tr:nth-child(even) > & {
+    &:nth-child(even) { background-color: $light-square; }
+    &:nth-child(odd) { background-color: $dark-square; }
+  }
+  tr:nth-child(odd) > & {
+    &:nth-child(even) { background-color: $dark-square; }
+    &:nth-child(odd) { background-color: $light-square; }
+  }
+
+  &.possibleMove {
+    background-color: #0099CC !important;
+  }
+  &.activated {
+    background-color: #00AAFF !important;
+  }
+}
+
+.numCell {
+  text-align: center;
+  color: white;
+  padding: 15px;
+}

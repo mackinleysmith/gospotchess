@@ -1,0 +1,8 @@
+.chessBoard {
+  width: 100%;
+}
+.chessBoard td {
+  background-color: #EEEEEE;
+  width: 40px;
+  height: 40px;
+}
