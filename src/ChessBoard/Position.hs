@@ -7,7 +7,9 @@ module ChessBoard.Position (
   , coordToPos) where
 
 -- | Combines an X coordinate and a Y coordinate.
-data Position  = Position X Y deriving (Eq,Show)
+data Position  = Position X Y deriving (Eq)
+instance Show Position where
+  show (Position x y) = [show y !! 1] ++ [show x !! 1]
 
 -- | Horizontal (X) Coordinates are labelled 1 to 8
 data X = X1 | X2 | X3 | X4 | X5 | X6 | X7 | X8 deriving (Eq,Show,Read)

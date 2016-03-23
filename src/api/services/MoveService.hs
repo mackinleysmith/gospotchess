@@ -64,7 +64,8 @@ getAvailableMoves current_board pos (PlayerPiece player piece) = do
           case firstOccupiedSpaceBetween (x, y) (posToCoord dest_pos) current_board of
             Just space ->
               case pieceAt current_board space of
-                Just (PlayerPiece player_at_space _) -> player_at_space == player || space /= dest_pos
+                Just (PlayerPiece player_at_space _) ->
+                  not $ space == dest_pos && player_at_space /= player
                 Nothing -> False
             Nothing -> False
       apply_movements = \acc (x_move, y_move) ->
@@ -80,27 +81,44 @@ getAvailableMoves current_board pos (PlayerPiece player piece) = do
           Nothing -> acc
   foldl apply_movements [] $ relativeMovementsForPiece piece
 
-firstOccupiedSpaceBetween :: Coord -> Coord -> Board -> Maybe Position
-firstOccupiedSpaceBetween (from_x, from_y) (to_x, to_y) current_board =
-  find position_is_occupied positions_in_between where
+rangeBetweenCoords :: Coord -> Coord -> ([Int], [Int])
+rangeBetweenCoords (from_x, from_y) (to_x, to_y) = (xs, ys) where
   xs = [from_x,(from_x + (if from_x > to_x then -1 else 1))..to_x]
   ys = [from_y,(from_y + (if from_y > to_y then -1 else 1))..to_y]
-  possible_positions_between = [coordToPos (x, y) | x <- xs, y <- ys, (x, y) /= (from_x, from_y), (x, y) /= (to_x, to_y)]
-  positions_in_between = [p | Just p <- possible_positions_between]
+
+shortestLineBetween :: Coord -> Coord -> [Coord]
+shortestLineBetween from_coord to_coord
+  | from_x == to_x = [(x, y) | x <- xs, y <- ys, y == to_x]
+  | from_y == to_y = [(x, y) | x <- xs, y <- ys, y == to_y]
+  | from_x == to_y && from_y == to_x = [(x, y) | x <- xs, y <- ys, (abs $ to_x - x) == (abs $ to_y - y)]
+  | otherwise = []
+  where
+  ((from_x, from_y), (to_x, to_y)) = (from_coord, to_coord)
+  (xs, ys) = rangeBetweenCoords (from_x, from_y) (to_x, to_y)
+
+positionsBetweenCoords :: Coord -> Coord -> [Position]
+positionsBetweenCoords from_coord to_coord =
+  [p | Just p <- possible_positions_between] where
+  shortest_line = shortestLineBetween from_coord to_coord
+  possible_positions_between = [coordToPos c | c <- shortest_line, c /= from_coord, c /= to_coord]
+
+firstOccupiedSpaceBetween :: Coord -> Coord -> Board -> Maybe Position
+firstOccupiedSpaceBetween from_coord to_coord current_board =
+  find position_is_occupied $ positionsBetweenCoords from_coord to_coord where
   position_is_occupied = \pos -> pieceAt current_board pos /= Nothing
 
 relativeMovementsForPiece :: Piece -> [(Int, Int)]
 relativeMovementsForPiece piece =
   case piece of
-    King -> [(nx, ny) | nx <- [-1..1], ny <- [-1..1], (nx, ny) /= (0, 0)]
-    Queen -> [(nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0), (abs nx) == (abs ny) || nx == 0 || ny == 0]
-    Bishop -> [(nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0), (abs nx) == (abs ny)]
-    Rook -> [(nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0), nx == 0 || ny == 0]
+    Pawn ->   [ ( 1, 0 ), ( 2,  0 ) ]
     Knight -> [ ( 2, 1 ), ( 2, -1 )
               , ( 1, 2 ), ( 1, -2 )
               , (-1, 2 ), (-1, -2 )
               , (-2, 1 ), (-2, -1 ) ]
-    Pawn -> [ (1, 0), (2, 0) ]
+    Rook ->   [ (nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0),   nx == 0 || ny == 0   ]
+    Bishop -> [ (nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0), (abs nx) == (abs ny) ]
+    Queen ->  [ (nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0), (abs nx) == (abs ny) || nx == 0 || ny == 0 ]
+    King ->   [ (nx, ny) | nx <- [-1..1], ny <- [-1..1], (nx, ny) /= (0, 0) ]
 
 listAvailableMoves :: MoveServiceHandler b
 listAvailableMoves = do
