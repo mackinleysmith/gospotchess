@@ -55,32 +55,6 @@ listMoves = do
   current_move_list <- liftIO . readMoves =<< view moveStateVar
   writeLBS $ BL.pack $ "{\"status\": \"ok\", \"moves\": " ++ (BL.unpack . encode $ JsonMoveRecords current_move_list) ++ "}"
 
-getAvailableMoves :: Board -> Position -> PlayerPiece -> MoveRecords
-getAvailableMoves current_board pos (PlayerPiece player piece) = do
-  let (x, y) = posToCoord pos
-      blocked_by_another_piece = \dest_pos ->
-        if piece == Knight then False
-        else do
-          case firstOccupiedSpaceBetween (x, y) (posToCoord dest_pos) current_board of
-            Just space ->
-              case pieceAt current_board space of
-                Just (PlayerPiece player_at_space _) ->
-                  not $ space == dest_pos && player_at_space /= player
-                Nothing -> False
-            Nothing -> False
-      apply_movements = \acc (x_move, y_move) ->
-        case coordToPos (x + x_move, y + y_move) of
-          Just new_pos ->
-            if blocked_by_another_piece new_pos then acc
-            else do
-              case pieceAt current_board new_pos of
-                Just (PlayerPiece player_at_new_pos _) ->
-                  if player_at_new_pos == player then acc
-                  else (pos, new_pos) : acc
-                Nothing -> (pos, new_pos) : acc
-          Nothing -> acc
-  foldl apply_movements [] $ relativeMovementsForPiece piece
-
 rangeBetweenCoords :: Coord -> Coord -> ([Int], [Int])
 rangeBetweenCoords (from_x, from_y) (to_x, to_y) = (xs, ys) where
   xs = [from_x,(from_x + (if from_x > to_x then -1 else 1))..to_x]
@@ -88,9 +62,9 @@ rangeBetweenCoords (from_x, from_y) (to_x, to_y) = (xs, ys) where
 
 shortestLineBetween :: Coord -> Coord -> [Coord]
 shortestLineBetween from_coord to_coord
-  | from_x == to_x = [(x, y) | x <- xs, y <- ys, y == to_x]
-  | from_y == to_y = [(x, y) | x <- xs, y <- ys, y == to_y]
-  | from_x == to_y && from_y == to_x = [(x, y) | x <- xs, y <- ys, (abs $ to_x - x) == (abs $ to_y - y)]
+  | from_x == to_x = [(x, y) | x <- xs, y <- ys, to_x - x == 0]
+  | from_y == to_y = [(x, y) | x <- xs, y <- ys, to_y - y == 0]
+  | (abs $ to_x - from_x) == (abs $ to_y - from_y) = [(x, y) | x <- xs, y <- ys, (abs $ to_x - x) == (abs $ to_y - y)]
   | otherwise = []
   where
   ((from_x, from_y), (to_x, to_y)) = (from_coord, to_coord)
@@ -110,7 +84,7 @@ firstOccupiedSpaceBetween from_coord to_coord current_board =
 relativeMovementsForPiece :: Piece -> [(Int, Int)]
 relativeMovementsForPiece piece =
   case piece of
-    Pawn ->   [ ( 1, 0 ), ( 2,  0 ) ]
+    Pawn ->   [ ( 1, 0 ) ]
     Knight -> [ ( 2, 1 ), ( 2, -1 )
               , ( 1, 2 ), ( 1, -2 )
               , (-1, 2 ), (-1, -2 )
@@ -119,6 +93,61 @@ relativeMovementsForPiece piece =
     Bishop -> [ (nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0), (abs nx) == (abs ny) ]
     Queen ->  [ (nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0), (abs nx) == (abs ny) || nx == 0 || ny == 0 ]
     King ->   [ (nx, ny) | nx <- [-1..1], ny <- [-1..1], (nx, ny) /= (0, 0) ]
+
+movementMaximumsForPiece :: Piece -> [(Int, Int)]
+movementMaximumsForPiece piece = do
+  case piece of
+    Rook   -> [ (  0, -7 ), (  0, 7 ), ( 7,  0 ), ( -7, 0 ) ]
+    Bishop -> [ ( -7, -7 ), ( -7, 7 ), ( 7, -7 ), (  7, 7 ) ]
+    Queen  -> [ ( -7, -7 ), ( -7, 7 ), ( 7, -7 ), (  7, 7 )
+              , (  0, -7 ), (  0, 7 ), ( 7,  0 ), ( -7, 0 ) ]
+    _ -> relativeMovementsForPiece piece
+
+relativeSpecialMovementsForPiece :: Piece -> Position -> [((Int, Int), Board -> Coord -> Bool)]
+relativeSpecialMovementsForPiece piece current_pos =
+  case piece of
+    Pawn ->   [ (( 2,  0 ), pieceHasMoved)
+              , (( 1,  1 ), pawnCanCapturePieceAt current_pos)
+              , (( 1, -1 ), pawnCanCapturePieceAt current_pos) ]
+    Rook   -> [] -- TODO: Castling, both sides
+    King   -> [] -- TODO: Castling, both sides
+    _ -> []
+
+pieceHasMoved :: Board -> Coord -> Bool
+pieceHasMoved current_board coord = True
+
+pawnCanCapturePieceAt :: Position -> Board -> Coord -> Bool
+pawnCanCapturePieceAt pawn_pos current_board dest_coord = do
+  case coordToPos dest_coord of
+    Nothing -> False
+    Just dest_pos ->
+      case pieceAt current_board dest_pos of
+        Nothing -> False
+        Just (PlayerPiece occupying_player _) ->
+          case pieceAt current_board pawn_pos of
+            Just (PlayerPiece current_player Pawn) ->
+              current_player /= occupying_player
+            _ -> False
+
+getAvailableMoves :: Board -> Position -> PlayerPiece -> MoveRecords
+getAvailableMoves current_board pos (PlayerPiece player piece) = do
+  let (x, y) = posToCoord pos
+  let apply_movements = \acc (x_move, y_move) -> do
+        let move_coord_vector = shortestLineBetween (x, y) (x + x_move, y + y_move)
+            move_pos_vector = [p | Just p <- [coordToPos c | c <- move_coord_vector], p /= pos]
+            move_vector = unblockedMoves current_board player move_pos_vector
+        [(pos, p) | p <- move_vector] ++ acc
+  foldl apply_movements [] $ movementMaximumsForPiece piece
+
+unblockedMoves :: Board -> Player -> [Position] -> [Position]
+unblockedMoves current_board current_player movement_vector =
+  case movement_vector of
+    [] -> []
+    (m:ms) ->
+      case pieceAt current_board m of
+        Nothing -> m : unblockedMoves current_board current_player ms
+        Just (PlayerPiece occupying_player _) ->
+          if current_player == occupying_player then [] else [m]
 
 listAvailableMoves :: MoveServiceHandler b
 listAvailableMoves = do
@@ -135,8 +164,8 @@ listAvailableMoves = do
           case pieceAt current_board fromPos of
             Just piece -> do
               let available_moves_list = getAvailableMoves current_board fromPos piece
-              liftIO . putStrLn . show $ coordToPos (0, 2)
-              liftIO . putStrLn . show $ firstOccupiedSpaceBetween (0, 3) (3, 0) current_board
+              -- liftIO . putStrLn . show $ coordToPos (0, 2)
+              -- liftIO . putStrLn . show $ firstOccupiedSpaceBetween (0, 3) (3, 0) current_board
               writeLBS $ BL.pack $ "{\"status\": \"ok\", \"piece\": \"" ++ (show piece) ++ "\", \"moves\": " ++ (BL.unpack . encode $ JsonMoveRecords available_moves_list) ++ "}"
             Nothing ->
               writeLBS "{\"status\": \"not ok\", \"error\": \"There is no piece at the specified coordinate.\"}"
