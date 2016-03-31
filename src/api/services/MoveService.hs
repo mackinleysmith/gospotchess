@@ -26,6 +26,9 @@ import ChessBoard.Pieces
 import ChessBoard.Position
 import Data.List
 
+type PossibleMove = Coord
+data BoardContext = BoardContext { __board :: Board, __move_records :: MoveRecords }
+
 data MoveState = MoveState { _moves :: MoveRecords, _counter :: Int }
 makeLenses ''MoveState
 
@@ -79,12 +82,12 @@ positionsBetweenCoords from_coord to_coord =
 firstOccupiedSpaceBetween :: Coord -> Coord -> Board -> Maybe Position
 firstOccupiedSpaceBetween from_coord to_coord current_board =
   find position_is_occupied $ positionsBetweenCoords from_coord to_coord where
-  position_is_occupied = \pos -> pieceAt current_board pos /= Nothing
+  position_is_occupied pos = pieceAt current_board pos /= Nothing
 
-relativeMovementsForPiece :: Piece -> [(Int, Int)]
+relativeMovementsForPiece :: Piece -> [PossibleMove]
 relativeMovementsForPiece piece =
   case piece of
-    Pawn ->   [ ( 1, 0 ) ]
+    Pawn ->   []
     Knight -> [ ( 2, 1 ), ( 2, -1 )
               , ( 1, 2 ), ( 1, -2 )
               , (-1, 2 ), (-1, -2 )
@@ -94,7 +97,7 @@ relativeMovementsForPiece piece =
     Queen ->  [ (nx, ny) | nx <- [-7..7], ny <- [-7..7], (nx, ny) /= (0, 0), (abs nx) == (abs ny) || nx == 0 || ny == 0 ]
     King ->   [ (nx, ny) | nx <- [-1..1], ny <- [-1..1], (nx, ny) /= (0, 0) ]
 
-movementMaximumsForPiece :: Piece -> [(Int, Int)]
+movementMaximumsForPiece :: Piece -> [PossibleMove]
 movementMaximumsForPiece piece = do
   case piece of
     Rook   -> [ (  0, -7 ), (  0, 7 ), ( 7,  0 ), ( -7, 0 ) ]
@@ -103,51 +106,112 @@ movementMaximumsForPiece piece = do
               , (  0, -7 ), (  0, 7 ), ( 7,  0 ), ( -7, 0 ) ]
     _ -> relativeMovementsForPiece piece
 
-relativeSpecialMovementsForPiece :: Piece -> Position -> [((Int, Int), Board -> Coord -> Bool)]
+relativeSpecialMovementsForPiece :: Piece -> Position -> [(PossibleMove, BoardContext -> Bool)]
 relativeSpecialMovementsForPiece piece current_pos =
   case piece of
-    Pawn ->   [ (( 2,  0 ), pieceHasMoved)
-              , (( 1,  1 ), pawnCanCapturePieceAt current_pos)
-              , (( 1, -1 ), pawnCanCapturePieceAt current_pos) ]
+    Pawn ->   [ (( 1,  0 ), pawnCanMoveOneStep    current_pos)
+              , (( 2,  0 ), pawnCanMoveTwoSteps   current_pos)
+              , (( 1,  1 ), pawnCanCapturePieceAt current_pos ( 1,  1 ))
+              , (( 1, -1 ), pawnCanCapturePieceAt current_pos ( 1, -1 )) ]
     Rook   -> [] -- TODO: Castling, both sides
     King   -> [] -- TODO: Castling, both sides
     _ -> []
 
-pieceHasMoved :: Board -> Coord -> Bool
-pieceHasMoved current_board coord = True
+pawnCanMoveOneStep :: Position -> BoardContext -> Bool
+pawnCanMoveOneStep pos board_context = True
 
-pawnCanCapturePieceAt :: Position -> Board -> Coord -> Bool
-pawnCanCapturePieceAt pawn_pos current_board dest_coord = do
-  case coordToPos dest_coord of
+pawnCanMoveTwoSteps :: Position -> BoardContext -> Bool
+pawnCanMoveTwoSteps pos board_context = pieceHasNotMoved pos board_context
+
+pieceHasMoved :: Position -> BoardContext -> Bool
+pieceHasMoved pos board_context = findMoveRecordByPiece pos board_context /= Nothing
+
+findMoveRecordFrom :: Position -> MoveRecords -> Maybe MoveRecord
+findMoveRecordFrom _ [] = Nothing
+findMoveRecordFrom pos (mr:mrs)
+  | from_pos == pos = Just mr
+  | otherwise = findMoveRecordFrom pos mrs
+  where
+  (_, from_pos, _) = mr
+
+findMoveRecordByPiece :: Position -> BoardContext -> Maybe MoveRecord
+findMoveRecordByPiece _ (BoardContext _ []) = Nothing
+findMoveRecordByPiece pos (BoardContext current_board move_records) =
+  case pieceAt current_board pos of
+    Nothing -> Nothing
+    Just (PlayerPiece piece_id _ _) ->
+      trace_move_records_for_piece_id piece_id move_records
+  where
+  trace_move_records_for_piece_id _piece_id [] = Nothing
+  trace_move_records_for_piece_id _piece_id (mr:mrs) = do
+    let (mr_piece_id, _, _) = mr
+    if mr_piece_id == _piece_id then Just mr
+    else trace_move_records_for_piece_id _piece_id mrs
+
+pieceHasNotMoved :: Position -> BoardContext -> Bool
+pieceHasNotMoved pos context = not $ pieceHasMoved pos context
+
+applyPossibleMove :: Coord -> PossibleMove -> Coord
+applyPossibleMove (x, y) (x_movement, y_movement) = (x + x_movement, y + y_movement)
+
+applyPossibleMoveToPosition :: Position -> PossibleMove -> Maybe Position
+applyPossibleMoveToPosition pos movement =
+  coordToPos $ applyPossibleMove (posToCoord pos) movement
+
+pawnCanCapturePieceAt :: Position -> PossibleMove -> BoardContext -> Bool
+pawnCanCapturePieceAt pawn_pos movement (BoardContext current_board _) = do
+  case applyPossibleMoveToPosition pawn_pos movement of
     Nothing -> False
-    Just dest_pos ->
+    Just dest_pos -> do
       case pieceAt current_board dest_pos of
         Nothing -> False
-        Just (PlayerPiece occupying_player _) ->
+        Just (PlayerPiece _ occupying_player _) ->
           case pieceAt current_board pawn_pos of
-            Just (PlayerPiece current_player Pawn) ->
+            Just (PlayerPiece _ current_player Pawn) ->
               current_player /= occupying_player
             _ -> False
 
-getAvailableMoves :: Board -> Position -> PlayerPiece -> MoveRecords
-getAvailableMoves current_board pos (PlayerPiece player piece) = do
-  let (x, y) = posToCoord pos
-  let apply_movements = \acc (x_move, y_move) -> do
-        let move_coord_vector = shortestLineBetween (x, y) (x + x_move, y + y_move)
-            move_pos_vector = [p | Just p <- [coordToPos c | c <- move_coord_vector], p /= pos]
-            move_vector = unblockedMoves current_board player move_pos_vector
-        [(pos, p) | p <- move_vector] ++ acc
-  foldl apply_movements [] $ movementMaximumsForPiece piece
+getAvailableMoves :: Board -> MoveRecords -> Position -> PlayerPiece -> MoveRecords
+getAvailableMoves current_board move_records pos (PlayerPiece piece_num player piece) =
+  normal_moves ++ special_moves where
+  (x, y) = posToCoord pos
+  apply_movement = \(x_move, y_move) -> do
+    if piece == Knight then
+      case coordToPos (x + x_move, y + y_move) of
+        Nothing -> []
+        Just p ->
+          case playerAtPosition current_board p of
+            Nothing -> [(piece_num, pos, p)]
+            Just occupying_player ->
+              if player == occupying_player then [] else [(piece_num, pos, p)]
+    else do
+      let move_coord_vector = shortestLineBetween (x, y) (x + x_move, y + y_move)
+          move_pos_vector = [p | Just p <- [coordToPos c | c <- move_coord_vector], p /= pos]
+          move_vector = unblockedMoves current_board player move_pos_vector
+      [(piece_num, pos, p) | p <- move_vector]
+  apply_movements = \acc relative_move -> (apply_movement relative_move) ++ acc
+  apply_special_movements = \acc ((x_move, y_move), can_move_fn) -> do
+    if can_move_fn (BoardContext current_board move_records) then
+      (apply_movement (x_move, y_move)) ++ acc
+    else acc
+  normal_moves  = foldl apply_movements [] $ movementMaximumsForPiece piece
+  special_moves = foldl apply_special_movements [] $ relativeSpecialMovementsForPiece piece pos
 
 unblockedMoves :: Board -> Player -> [Position] -> [Position]
 unblockedMoves current_board current_player movement_vector =
   case movement_vector of
     [] -> []
     (m:ms) ->
-      case pieceAt current_board m of
+      case playerAtPosition current_board m of
         Nothing -> m : unblockedMoves current_board current_player ms
-        Just (PlayerPiece occupying_player _) ->
+        Just occupying_player ->
           if current_player == occupying_player then [] else [m]
+
+playerAtPosition :: Board -> Position -> Maybe Player
+playerAtPosition current_board pos =
+  case pieceAt current_board pos of
+    Nothing -> Nothing
+    Just (PlayerPiece _ occupying_player _) -> Just occupying_player
 
 listAvailableMoves :: MoveServiceHandler b
 listAvailableMoves = do
@@ -163,7 +227,9 @@ listAvailableMoves = do
         Just fromPos -> do
           case pieceAt current_board fromPos of
             Just piece -> do
-              let available_moves_list = getAvailableMoves current_board fromPos piece
+              current_move_list <- liftIO . readMoves =<< view moveStateVar
+              let available_moves_list = getAvailableMoves current_board current_move_list fromPos piece
+              liftIO . putStrLn $ show piece
               -- liftIO . putStrLn . show $ coordToPos (0, 2)
               -- liftIO . putStrLn . show $ firstOccupiedSpaceBetween (0, 3) (3, 0) current_board
               writeLBS $ BL.pack $ "{\"status\": \"ok\", \"piece\": \"" ++ (show piece) ++ "\", \"moves\": " ++ (BL.unpack . encode $ JsonMoveRecords available_moves_list) ++ "}"
@@ -188,7 +254,8 @@ requestFromBoardService endpoint opts onsuccess = do
 
 putMove :: MoveRecord -> MVar MoveState -> IO (Maybe String)
 putMove new_move ms_var = do
-  let [encoded_from_pos, encoded_to_pos] = T.pack . encodePosition <$> [fst new_move, snd new_move]
+  let (_, raw_from_pos, raw_to_pos) = new_move
+      [encoded_from_pos, encoded_to_pos] = T.pack . encodePosition <$> [raw_from_pos, raw_to_pos]
       opts = defaults & param "from" .~ [encoded_from_pos] & param "to" .~ [encoded_to_pos]
   r <- getWith opts "http://localhost:9000/api/board/modify"
   case r ^? responseBody . key "status" . _String of
@@ -210,14 +277,20 @@ doMove = do
     (Just fromParam, Just toParam) -> do
       case (decodePosition fromParam, decodePosition toParam) of
         (Just fromPos, Just toPos) -> do
-          let new_move = (fromPos, toPos)
-          maybe_err <- liftIO . putMove new_move =<< view moveStateVar
-          case maybe_err of
-            Nothing -> do
-              let json_move = BL.unpack . encode $ JsonMoveRecord new_move
-              writeLBS . BL.pack $ "{\"status\": \"ok\", \"move\": " ++ json_move ++ "}"
-            Just err -> do
-              writeLBS . BL.pack $ "{\"status\": \"not ok\", \"error\": " ++ err ++ "}"
+          current_board <- with boardService $ do
+            gs_var <- view gameStateVar
+            liftIO $ readBoard gs_var
+          case pieceAt current_board fromPos of
+            Just (PlayerPiece piece_num _ _) -> do
+              let new_move = (piece_num, fromPos, toPos)
+              maybe_err <- liftIO . putMove new_move =<< view moveStateVar
+              case maybe_err of
+                Nothing -> do
+                  let json_move = BL.unpack . encode $ JsonMoveRecord new_move
+                  writeLBS . BL.pack $ "{\"status\": \"ok\", \"move\": " ++ json_move ++ "}"
+                Just err -> do
+                  writeLBS . BL.pack $ "{\"status\": \"not ok\", \"error\": " ++ err ++ "}"
+            Nothing -> writeLBS "{\"status\": \"not ok\", \"error\": \"There was no piece at the from position supplied.\"}"
         _ -> writeLBS "{\"status\": \"not ok\", \"error\": \"Failed to parse one of the positions supplied.\"}"
     _ -> writeLBS "{\"status\": \"not ok\", \"error\": \"You must include both a from and to parameter.\"}"
 

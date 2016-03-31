@@ -2,6 +2,7 @@ module ChessBoard.Pieces (
   Player (White,Black)
   , Piece (King,Queen,Bishop,Knight,Rook,Pawn)
   , PlayerPiece (PlayerPiece)
+  , PieceNum
 ) where
 
 -- | The types of player on the chess board.
@@ -11,7 +12,12 @@ data Player = White | Black deriving (Eq)
 data Piece = King | Queen | Bishop | Knight | Rook | Pawn deriving (Eq)
 
 -- | Pieces on the chess board have both a player and a type
-data PlayerPiece = PlayerPiece Player Piece deriving (Eq)
+data PlayerPiece = PlayerPiece PieceNum Player Piece
+instance Eq PlayerPiece where
+  PlayerPiece aa ab ac == PlayerPiece ba bb bc =
+    aa == ba && ab == bb && ac == bc
+
+type PieceNum = Int
 
 -- | Prints either "w" or "b"
 instance Show Player where
@@ -29,4 +35,5 @@ instance Show Piece where
 
 -- | Combines piece ++ player. (e.g. "pb" for pawn black)
 instance Show PlayerPiece where
-  show (PlayerPiece player piece) = (show player) ++ (show piece)
+  show (PlayerPiece _ player piece) = (show player) ++ (show piece)
+  -- show (PlayerPiece uniq_id player piece) = (show player) ++ (show piece) ++ "-" ++ (show uniq_id)

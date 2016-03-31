@@ -25,7 +25,7 @@ type MoveResult  = Either String (Board,BoardSquare)
 -- | A square of the chess board may contain a piece, or it may not.
 type BoardSquare = Maybe PlayerPiece
 
-type MoveRecord = (Position, Position)
+type MoveRecord = (PieceNum, Position, Position)
 type MoveRecords = [MoveRecord]
 
 -- | Prints the board out in an text based grid
@@ -49,7 +49,7 @@ initBoard :: Board
 initBoard = Board $ fromList $ map fromList $ concat [
   [ whiteRearLine, whiteFrontLine ]
   , (replicate 4 emptyLine)
-  , [ blackFrontLine , blackRearLine]
+  , [ blackFrontLine, blackRearLine]
   ]
   where
     whiteFrontLine   = frontLine White
@@ -57,8 +57,9 @@ initBoard = Board $ fromList $ map fromList $ concat [
     blackFrontLine   = frontLine Black
     blackRearLine    = rearLine Black
     emptyLine        = replicate 8 Nothing
-    frontLine player = replicate 8 $ Just $ PlayerPiece player Pawn
-    rearLine  player = map (Just . (PlayerPiece player)) [
+    pieceIds player  = if player == White then [1..16] else [17..32]
+    frontLine player = [Just $ PlayerPiece piece_id player Pawn | i <- [0..7], let piece_id = pieceIds player !! i]
+    rearLine  player = [Just $ PlayerPiece piece_id player piece | (piece, i) <- zip [
       Rook
       ,Knight
       ,Bishop
@@ -67,7 +68,7 @@ initBoard = Board $ fromList $ map fromList $ concat [
       ,Bishop
       ,Knight
       ,Rook
-      ]
+      ] [0..7], let piece_id = pieceIds player !! (i + 8)]
 
 -- | Query the piece at this position. There may not be a piece, of course.
 pieceAt :: Board -> Position -> BoardSquare
@@ -116,7 +117,7 @@ move' _ _ _ Nothing _           = Left "No piece at starting position!"
 move' b sC eC (Just p1) Nothing = Right ((newBoard b sC eC p1),Nothing)
 
 -- This function is really ugly. Must be a better way...
-move' b sC eC (Just pp1@(PlayerPiece p1 _)) (Just pp2@(PlayerPiece p2 _)) =
+move' b sC eC (Just pp1@(PlayerPiece _ p1 _)) (Just pp2@(PlayerPiece _ p2 _)) =
   if pp1 == pp2
   then Left "Must move to a different position!"
   else

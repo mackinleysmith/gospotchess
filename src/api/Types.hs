@@ -24,9 +24,9 @@ instance ToJSON JsonBoard where
 newtype JsonMoveRecord = JsonMoveRecord { getMoveRecord :: MoveRecord }
 instance ToJSON JsonMoveRecord where
   toJSON json_mr = do
-    let (from_mr, to_mr) = getMoveRecord json_mr
+    let (piece_num, from_mr, to_mr) = getMoveRecord json_mr
     let (from_pos, to_pos) = (encodePosition from_mr, encodePosition to_mr)
-    object [ "from" .= from_pos, "to" .= to_pos ]
+    object [ "piece_num" .= piece_num, "from" .= from_pos, "to" .= to_pos ]
 
 newtype JsonMoveRecords = JsonMoveRecords { getMoveRecords :: MoveRecords }
 instance ToJSON JsonMoveRecords where
