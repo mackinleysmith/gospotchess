@@ -113,15 +113,63 @@ relativeSpecialMovementsForPiece piece current_pos =
               , (( 2,  0 ), pawnCanMoveTwoSteps   current_pos)
               , (( 1,  1 ), pawnCanCapturePieceAt current_pos ( 1,  1 ))
               , (( 1, -1 ), pawnCanCapturePieceAt current_pos ( 1, -1 )) ]
-    Rook   -> [] -- TODO: Castling, both sides
-    King   -> [] -- TODO: Castling, both sides
+    King   -> [ (( 0, -3 ), canCastleQueenSide    current_pos)
+              , (( 0,  2 ), canCastleKingSide     current_pos)
+              ]
     _ -> []
 
 pawnCanMoveOneStep :: Position -> BoardContext -> Bool
-pawnCanMoveOneStep pos board_context = True
+pawnCanMoveOneStep pos (BoardContext current_board _) = do
+  case applyPossibleMoveToPosition pos $ reverseMovementForBlackFromPos (1, 0) current_board pos of
+    Nothing -> False
+    Just dest_pos -> pieceAt current_board dest_pos == Nothing
 
 pawnCanMoveTwoSteps :: Position -> BoardContext -> Bool
 pawnCanMoveTwoSteps pos board_context = pieceHasNotMoved pos board_context
+
+pawnCanCapturePieceAt :: Position -> PossibleMove -> BoardContext -> Bool
+pawnCanCapturePieceAt pawn_pos movement (BoardContext current_board _) =
+  case applyPossibleMoveToPosition pawn_pos $ reverseMovementForBlackFromPos movement current_board pawn_pos of
+    Nothing -> False
+    Just dest_pos -> do
+      case pieceAt current_board dest_pos of
+        Nothing -> False
+        Just (PlayerPiece _ occupying_player _) ->
+          case pieceAt current_board pawn_pos of
+            Just (PlayerPiece _ current_player Pawn) ->
+              current_player /= occupying_player
+            _ -> False
+
+canCastleKingSide :: Position -> BoardContext -> Bool
+canCastleKingSide king_pos (BoardContext current_board move_records)
+  | not $ king_pos `elem` [Position X1 YE, Position X8 YE] = False -- Check that the position passed in is a king-spot.
+  | otherwise =
+    -- Check that the piece at the passed-in position really is a king...
+    case pieceAt current_board king_pos of
+      Just (PlayerPiece _ king_player King) -> do
+        -- Check that the piece at the last queen-side spot is a rook...
+        case pieceAt current_board rook_pos of
+          Just (PlayerPiece _ rook_player Rook) ->
+            -- Check that the rook belongs to the same player as the king...
+            if king_player /= rook_player then False
+            else do
+              -- Check that the spaces between are vacant...
+              let spots_between = [YF, YG]
+              case [pieceAt current_board $ kingLineAt spot | spot <- spots_between] of
+                [Nothing, Nothing] -> do
+                  -- Check that the king and rook have not moved yet...
+                  pieceHasNotMoved king_pos (BoardContext current_board move_records) &&
+                    pieceHasNotMoved rook_pos (BoardContext current_board move_records)
+                _ -> False
+          _ -> False
+      _ -> False
+  where
+  (Position king_x king_y) = king_pos
+  kingLineAt y = Position king_x y
+  rook_pos = kingLineAt YH
+
+canCastleQueenSide :: Position -> BoardContext -> Bool
+canCastleQueenSide king_pos (BoardContext current_board move_records) = True
 
 pieceHasMoved :: Position -> BoardContext -> Bool
 pieceHasMoved pos board_context = findMoveRecordByPiece pos board_context /= Nothing
@@ -158,26 +206,25 @@ applyPossibleMoveToPosition :: Position -> PossibleMove -> Maybe Position
 applyPossibleMoveToPosition pos movement =
   coordToPos $ applyPossibleMove (posToCoord pos) movement
 
-pawnCanCapturePieceAt :: Position -> PossibleMove -> BoardContext -> Bool
-pawnCanCapturePieceAt pawn_pos movement (BoardContext current_board _) = do
-  case applyPossibleMoveToPosition pawn_pos movement of
-    Nothing -> False
-    Just dest_pos -> do
-      case pieceAt current_board dest_pos of
-        Nothing -> False
-        Just (PlayerPiece _ occupying_player _) ->
-          case pieceAt current_board pawn_pos of
-            Just (PlayerPiece _ current_player Pawn) ->
-              current_player /= occupying_player
-            _ -> False
+reverseMovementForBlack :: PossibleMove -> Player -> PossibleMove
+reverseMovementForBlack (x, y) player
+  | player == White = (x, y)
+  | otherwise = (x * (-1), y * (-1))
+
+reverseMovementForBlackFromPos :: PossibleMove -> Board -> Position -> PossibleMove
+reverseMovementForBlackFromPos movement current_board pos =
+  case pieceAt current_board pos of
+    Just (PlayerPiece _ player Pawn) -> reverseMovementForBlack movement player
+    _ -> movement
 
 getAvailableMoves :: Board -> MoveRecords -> Position -> PlayerPiece -> MoveRecords
 getAvailableMoves current_board move_records pos (PlayerPiece piece_num player piece) =
   normal_moves ++ special_moves where
   (x, y) = posToCoord pos
-  apply_movement = \(x_move, y_move) -> do
-    if piece == Knight then
-      case coordToPos (x + x_move, y + y_move) of
+  apply_movement = \movement -> do
+    let applied_move = applyPossibleMove (x, y) $ reverseMovementForBlack movement player
+    if piece `elem` [King, Knight] then
+      case coordToPos applied_move of
         Nothing -> []
         Just p ->
           case playerAtPosition current_board p of
@@ -185,14 +232,14 @@ getAvailableMoves current_board move_records pos (PlayerPiece piece_num player p
             Just occupying_player ->
               if player == occupying_player then [] else [(piece_num, pos, p)]
     else do
-      let move_coord_vector = shortestLineBetween (x, y) (x + x_move, y + y_move)
+      let move_coord_vector = shortestLineBetween (x, y) applied_move
           move_pos_vector = [p | Just p <- [coordToPos c | c <- move_coord_vector], p /= pos]
           move_vector = unblockedMoves current_board player move_pos_vector
       [(piece_num, pos, p) | p <- move_vector]
   apply_movements = \acc relative_move -> (apply_movement relative_move) ++ acc
-  apply_special_movements = \acc ((x_move, y_move), can_move_fn) -> do
+  apply_special_movements = \acc (movement, can_move_fn) -> do
     if can_move_fn (BoardContext current_board move_records) then
-      (apply_movement (x_move, y_move)) ++ acc
+      apply_movement movement ++ acc
     else acc
   normal_moves  = foldl apply_movements [] $ movementMaximumsForPiece piece
   special_moves = foldl apply_special_movements [] $ relativeSpecialMovementsForPiece piece pos
@@ -218,18 +265,17 @@ listAvailableMoves = do
   modifyResponse $ setHeader "Content-Type" "application/json"
   maybeFromParam <- getParam "from"
   case maybeFromParam of
-    Just fromParam -> do
-      current_board <- with boardService $ do
-        gs_var <- view gameStateVar
-        liftIO $ readBoard gs_var
-      liftIO . putStrLn $ show current_board
+    Just fromParam ->
       case decodePosition fromParam of
         Just fromPos -> do
+          current_board <- with boardService $ do
+            gs_var <- view gameStateVar
+            liftIO $ readBoard gs_var
           case pieceAt current_board fromPos of
             Just piece -> do
               current_move_list <- liftIO . readMoves =<< view moveStateVar
               let available_moves_list = getAvailableMoves current_board current_move_list fromPos piece
-              liftIO . putStrLn $ show piece
+              -- liftIO . putStrLn $ show piece
               -- liftIO . putStrLn . show $ coordToPos (0, 2)
               -- liftIO . putStrLn . show $ firstOccupiedSpaceBetween (0, 3) (3, 0) current_board
               writeLBS $ BL.pack $ "{\"status\": \"ok\", \"piece\": \"" ++ (show piece) ++ "\", \"moves\": " ++ (BL.unpack . encode $ JsonMoveRecords available_moves_list) ++ "}"
