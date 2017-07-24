@@ -106,17 +106,31 @@ movementMaximumsForPiece piece = do
               , (  0, -7 ), (  0, 7 ), ( 7,  0 ), ( -7, 0 ) ]
     _ -> relativeMovementsForPiece piece
 
-relativeSpecialMovementsForPiece :: Piece -> Position -> [(PossibleMove, BoardContext -> Bool)]
+type SideEffectMove = MoveRecord
+relativeSpecialMovementsForPiece :: Piece -> Position -> [(PossibleMove, BoardContext -> Bool, Maybe (BoardContext -> Maybe SideEffectMove))]
 relativeSpecialMovementsForPiece piece current_pos =
   case piece of
-    Pawn ->   [ (( 1,  0 ), pawnCanMoveOneStep    current_pos)
-              , (( 2,  0 ), pawnCanMoveTwoSteps   current_pos)
-              , (( 1,  1 ), pawnCanCapturePieceAt current_pos ( 1,  1 ))
-              , (( 1, -1 ), pawnCanCapturePieceAt current_pos ( 1, -1 )) ]
-    King   -> [ (( 0, -3 ), canCastleQueenSide    current_pos)
-              , (( 0,  2 ), canCastleKingSide     current_pos)
+    Pawn ->   [ (( 1,  0 ), pawnCanMoveOneStep    current_pos, Nothing)
+              , (( 2,  0 ), pawnCanMoveTwoSteps   current_pos, Nothing)
+              , (( 1,  1 ), pawnCanCapturePieceAt current_pos ( 1,  1 ), Nothing)
+              , (( 1, -1 ), pawnCanCapturePieceAt current_pos ( 1, -1 ), Nothing) ]
+    King   -> [ (( 0, -3 ), canCastleQueenSide    current_pos, Just $ castleRook current_pos Queen)
+              , (( 0,  2 ), canCastleKingSide     current_pos, Just $ castleRook current_pos King)
               ]
     _ -> []
+
+castleRook :: Position -> Piece -> BoardContext -> Maybe SideEffectMove
+castleRook pos rook_side (BoardContext current_board _) =
+  case pieceAt current_board pos of
+    Just (PlayerPiece _ player King) -> do
+      let row_x = case player of White -> X1; Black -> X8
+          dest_y = case rook_side of King -> YE; Queen -> YC; _ -> error "Not a valid rook side!"
+          rook_pos = Position row_x YA
+      case pieceAt current_board rook_pos of
+        Just (PlayerPiece rook_id _ Rook) ->
+          Just $ (rook_id, rook_pos, Position row_x dest_y)
+        _ -> Nothing
+    _ -> Nothing
 
 pawnCanMoveOneStep :: Position -> BoardContext -> Bool
 pawnCanMoveOneStep pos (BoardContext current_board _) = do
@@ -140,6 +154,7 @@ pawnCanCapturePieceAt pawn_pos movement (BoardContext current_board _) =
               current_player /= occupying_player
             _ -> False
 
+-- TODO: only not in check
 canCastleKingSide :: Position -> BoardContext -> Bool
 canCastleKingSide king_pos (BoardContext current_board move_records)
   | not $ king_pos `elem` [Position X1 YE, Position X8 YE] = False -- Check that the position passed in is a king-spot.
@@ -164,7 +179,7 @@ canCastleKingSide king_pos (BoardContext current_board move_records)
           _ -> False
       _ -> False
   where
-  (Position king_x king_y) = king_pos
+  (Position king_x _) = king_pos
   kingLineAt y = Position king_x y
   rook_pos = kingLineAt YH
 
@@ -236,10 +251,16 @@ getAvailableMoves current_board move_records pos (PlayerPiece piece_num player p
           move_pos_vector = [p | Just p <- [coordToPos c | c <- move_coord_vector], p /= pos]
           move_vector = unblockedMoves current_board player move_pos_vector
       [(piece_num, pos, p) | p <- move_vector]
-  apply_movements = \acc relative_move -> (apply_movement relative_move) ++ acc
-  apply_special_movements = \acc (movement, can_move_fn) -> do
-    if can_move_fn (BoardContext current_board move_records) then
-      apply_movement movement ++ acc
+  apply_movements = \acc relative_move -> apply_movement relative_move ++ acc
+  apply_special_movements = \acc (movement, can_move_fn, potential_side_effect) ->
+    if can_move_fn (BoardContext current_board move_records) then do
+      -- TODO: apply side effect
+      case potential_side_effect of
+        Just side_effect ->
+          case side_effect (BoardContext current_board move_records) of
+            Just applied_side_effect -> apply_movement movement ++ [applied_side_effect] ++ acc
+            Nothing -> apply_movement movement ++ acc
+        Nothing -> apply_movement movement ++ acc
     else acc
   normal_moves  = foldl apply_movements [] $ movementMaximumsForPiece piece
   special_moves = foldl apply_special_movements [] $ relativeSpecialMovementsForPiece piece pos
